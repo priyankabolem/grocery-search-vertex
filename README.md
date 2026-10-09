@@ -194,7 +194,8 @@ curl "http://127.0.0.1:8000/search?q=organic%20milk&department=dairy%20eggs&k=3"
 
 ## Results
 
-Measured on the full Instacart catalog, with the service running against a Vertex AI Search app in
+Measured on the filtered catalog of 9,162 products, built from the Instacart dataset by keeping only
+products with at least 20 orders, with the service running against a Vertex AI Search app in
 `global` and a `n1-standard-2` Vertex AI endpoint in `us-central1`.
 
 | | |
