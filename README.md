@@ -1,5 +1,7 @@
 # Grocery Product Search & Re-ranking on Google Cloud
 
+[![CI](https://github.com/priyankabolem/grocery-search-vertex/actions/workflows/ci.yml/badge.svg)](https://github.com/priyankabolem/grocery-search-vertex/actions/workflows/ci.yml)
+
 A two-stage product search service for a grocery catalog. **Vertex AI Search** retrieves candidate
 products for a text query, a **gradient boosting model served from a Vertex AI endpoint** re-ranks
 them by predicted reorder propensity, and a **FastAPI** service on **Cloud Run** blends both signals
@@ -113,8 +115,10 @@ set -a; source .env; set +a
 | 7. Clean up | `make cleanup` | Endpoint deleted (stops hourly billing) |
 
 **Step 3 – Vertex AI Search (console):** AI Applications → **Create app** → **Search** (location
-`global`) → create a data store from **BigQuery**, table `grocery.products`, **structured data**,
-ID field `product_id`. In the schema, mark `product_name` searchable and `department` filterable.
+`global`) → create a data store from **BigQuery**, table `grocery.products`, **structured data**.
+The console may generate its own document IDs rather than using a column; that is fine, because the
+API reads `product_id` from each document's data, not from its document ID. In the schema, mark
+`product_name` searchable and `department` filterable.
 Wait for indexing to finish, then copy the app ID into `SEARCH_ENGINE_ID` in `.env`.
 
 **Step 4 options:** `python scripts/03_train_and_deploy.py --skip-deploy` trains and evaluates
