@@ -1,6 +1,6 @@
 import pytest
 
-from grocery_search.ranking import position_score, rerank
+from grocery_search.ranking import SCORE_DECIMALS, position_score, rerank
 
 
 def _docs(*ids):
@@ -34,7 +34,7 @@ def test_without_model_scores_keeps_retrieval_order():
     ranked = rerank(_docs("A", "B", "C"), None)
     assert [d["product_id"] for d in ranked] == ["A", "B", "C"]
     assert "final_score" not in ranked[0]
-    assert ranked[2]["search_score"] == pytest.approx(1 / 3)
+    assert ranked[2]["search_score"] == 0.333
 
 
 def test_length_mismatch_falls_back_to_retrieval_order():
@@ -57,3 +57,20 @@ def test_input_is_not_mutated():
     docs = _docs("A", "B")
     rerank(docs, [0.1, 0.9])
     assert docs == [{"product_id": "A"}, {"product_id": "B"}]
+
+
+def test_scores_are_rounded_for_output():
+    ranked = rerank(_docs("A", "B", "C"), [0.6940940527382665, 0.8088261878541919, 0.8412721058170533])
+    assert [d["search_score"] for d in ranked] == [1.0, 0.5, 0.333]
+    assert [d["model_score"] for d in ranked] == [0.694, 0.809, 0.841]
+    assert [d["final_score"] for d in ranked] == [0.908, 0.593, 0.486]
+    for doc in ranked:
+        for key in ("search_score", "model_score", "final_score"):
+            assert doc[key] == round(doc[key], SCORE_DECIMALS)
+
+
+def test_ordering_uses_unrounded_scores():
+    """Two items whose scores round to the same value keep their true order."""
+    ranked = rerank(_docs("A", "B"), [0.0, 0.0011], search_weight=0.0, model_weight=1.0)
+    assert [d["product_id"] for d in ranked] == ["B", "A"]
+    assert [d["final_score"] for d in ranked] == [0.001, 0.0]

@@ -49,6 +49,7 @@ Products with fewer than 20 orders are excluded so the statistics are reliable.
 | `final_score` | API | `0.7 × search_score + 0.3 × model_score` (weights configurable) |
 
 Example: retrieval order A, B, C with model scores 0.40, 0.85, 0.60 → final scores 0.82, 0.61, 0.41.
+Scores are rounded to three decimals in the response; ordering uses the unrounded values.
 Relevance dominates, and the model lifts frequently re-bought items when relevance is close.
 
 **Graceful degradation:** if no endpoint is configured or a prediction call fails, the API logs the
@@ -68,6 +69,7 @@ scripts/
   03_train_and_deploy.py train + evaluate, register in Model Registry, deploy endpoint
   04_cleanup.py          undeploy and delete the endpoint
 tests/                   pytest unit tests for features and ranking
+docs/images/             screenshots of the running system
 .github/workflows/ci.yml lint + tests on every push
 Dockerfile               non-root image for Cloud Run (also runs on GKE)
 Makefile                 shortcuts for every step
@@ -118,13 +120,34 @@ Wait for indexing to finish, then copy the app ID into `SEARCH_ENGINE_ID` in `.e
 **Step 4 options:** `python scripts/03_train_and_deploy.py --skip-deploy` trains and evaluates
 locally (reports MAE against a mean-prediction baseline and R²) without creating cloud resources.
 
-**Step 6 permissions:** the Cloud Run service account needs `roles/aiplatform.user` and
-`roles/discoveryengine.user`.
+**Step 6 permissions:** two different service accounts are involved.
 
-### Example response (shape; values illustrative)
+The Cloud Run *runtime* service account calls the two backends, so it needs `roles/aiplatform.user`
+and `roles/discoveryengine.user`.
+
+Deploying from source also builds the image, and the build runs as the Compute Engine default
+service account. New projects no longer grant that account any roles by default, so a source deploy
+fails while reading its own uploaded source unless it has:
+
+| Role | Needed for |
+|---|---|
+| `roles/storage.objectViewer` | Reading the uploaded source archive |
+| `roles/artifactregistry.writer` | Pushing the built image |
+| `roles/logging.logWriter` | Writing build logs |
 
 ```bash
-curl "http://127.0.0.1:8000/search?q=organic%20milk&department=dairy%20eggs&k=5"
+SA="$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')-compute@developer.gserviceaccount.com"
+for ROLE in roles/aiplatform.user roles/discoveryengine.user \
+            roles/storage.objectViewer roles/artifactregistry.writer roles/logging.logWriter; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA" --role="$ROLE" --condition=None
+done
+```
+
+### Example response
+
+```bash
+curl "http://127.0.0.1:8000/search?q=organic%20milk&department=dairy%20eggs&k=3"
 ```
 
 ```json
@@ -132,13 +155,81 @@ curl "http://127.0.0.1:8000/search?q=organic%20milk&department=dairy%20eggs&k=5"
   "query": "organic milk",
   "department": "dairy eggs",
   "reranked": true,
-  "latency_ms": 212.4,
+  "latency_ms": 374.8,
   "results": [
-    {"product_id": "27845", "product_name": "Organic Whole Milk", "department": "dairy eggs",
-     "aisle": "milk", "search_score": 1.0, "model_score": 0.81, "final_score": 0.943}
+    {
+      "product_id": "11821",
+      "product_name": "Organic Milk Whole",
+      "department": "dairy eggs",
+      "aisle": "milk",
+      "search_score": 1.0,
+      "model_score": 0.694,
+      "final_score": 0.908
+    },
+    {
+      "product_id": "1463",
+      "product_name": "Organic Milk",
+      "department": "dairy eggs",
+      "aisle": "milk",
+      "search_score": 0.5,
+      "model_score": 0.809,
+      "final_score": 0.593
+    },
+    {
+      "product_id": "27845",
+      "product_name": "Organic Whole Milk",
+      "department": "dairy eggs",
+      "aisle": "milk",
+      "search_score": 0.333,
+      "model_score": 0.841,
+      "final_score": 0.486
+    }
   ]
 }
 ```
+
+## Results
+
+Measured on the full Instacart catalog, with the service running against a Vertex AI Search app in
+`global` and a `n1-standard-2` Vertex AI endpoint in `us-central1`.
+
+| | |
+|---|---|
+| Catalog | 9,162 products, 21 departments, 133 aisles |
+| Search index | 9,162 documents |
+| Train / test split | 7,329 / 1,833 products |
+| Test MAE | **0.0930**, against **0.1279** for a mean-prediction baseline (27% lower) |
+| Test R² | 0.4552 |
+| `/search` latency, Cloud Run | 123 ms median, 152 ms p95 |
+| `/search` latency, local | 209 ms median, 406 ms p95 |
+
+Each latency figure is 20 warm requests at `k=10`, spread across ten queries, covering both stages:
+retrieval plus one batched prediction call. Cold starts are excluded. The deployed service is
+faster than a local one because it shares a region with the endpoint, while a laptop adds a round
+trip to both backends.
+
+Reorder rate is bounded in `[0, 1]`, so the absolute errors are small by construction and the
+comparison against the baseline is the meaningful number.
+
+## Screenshots
+
+![Swagger UI](docs/images/api-docs.png)
+*OpenAPI docs served at `/docs`, exposing `/health` and `/search` with the response schemas.*
+
+![Search response](docs/images/search-response.png)
+*A `/search` call for "organic milk" filtered to `dairy eggs`, with all three scores per product.*
+
+![Vertex AI Search app](docs/images/search-app-overview.png)
+*The search app in AI Applications; the Retrieve stage is backed by the BigQuery data store.*
+
+![Model Registry](docs/images/model-registry.png)
+*`grocery-reorder-model` version 1 registered in `us-central1` and marked deployed.*
+
+![Vertex AI endpoint](docs/images/vertex-endpoint.png)
+*The endpoint serving the model, active with one model in `us-central1`.*
+
+![Cloud Run service](docs/images/cloud-run.png)
+*The `grocery-search` service deployed from source in `us-central1` with public access.*
 
 ## Design decisions
 
